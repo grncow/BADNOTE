@@ -57,6 +57,7 @@ class PageOcrCoordinator(private val repository: NoteRepository, private val rec
             if (!queue.current(request)) return Receipt(false,null,"cancelled")
             queue.progress(request, "image", 0, 1)
             try {
+                recognition.requireAvailable()
                 val imagePage = if (BuildConfig.OCR_MIXED_SOURCES) OcrSources.rasterOnly(page) else page
                 val bitmap = StreamingPdf.render(repository, imagePage,OcrSources.rasterWidth(imagePage))
                 val lease = BitmapLease { bitmap.recycle() }

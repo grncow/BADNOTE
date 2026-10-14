@@ -62,6 +62,9 @@ object RecognitionServiceTaskChecks {
             }
             check(first.get(3, TimeUnit.SECONDS) is IllegalStateException)
             check(!secondStarted.get()) { "second recognizer started while original Task remained running" }
+            check(runCatching { service.requireAvailable() }.exceptionOrNull()?.message == "recognizerCircuitOpen") {
+                "An image fallback must be rejected before allocating pixels for a timed-out Task"
+            }
             val early = try { service.infer(1, { Tasks.forResult("too early") }); null }
                 catch (error: Throwable) { error }
             check(early is IllegalStateException)

@@ -127,6 +127,12 @@ class RecognitionService(private val lowMemory: Boolean = false) : Closeable {
         queueMaintenance()
     }
 
+    /** Check before allocating a raster fallback while a timed-out SDK Task still owns its input. */
+    internal fun requireAvailable() {
+        if (closing.get() || inactive.get() || blocked.get())
+            error(if (closing.get()) "recognizerClosed" else if (inactive.get()) "recognizerInactive" else "recognizerCircuitOpen")
+    }
+
     internal fun <T> infer(timeoutSeconds: Long, start: () -> Task<T>, finished: () -> Unit = {}): T {
         if (closing.get() || inactive.get() || blocked.get()) {
             finished()
