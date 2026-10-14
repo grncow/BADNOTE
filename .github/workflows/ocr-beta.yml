@@ -1,0 +1,98 @@
+name: OCR beta build and prerelease
+
+on:
+  push:
+    branches: [codex/ocr-4.1.2-beta.1]
+  pull_request:
+    branches: [codex/ocr-native-plan]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ocr-beta-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install pinned Android tools
+        run: sdkmanager 'platforms;android-36' 'build-tools;36.1.0' 'ndk;28.2.13676358' 'cmake;3.22.1'
+      - name: Evaluation and compatibility tool regressions
+        run: |
+          python3 tools/test_ocr_evaluation.py
+          python3 tools/test_ocr_tools.py
+          python3 tools/test_apk_native.py
+          python3 tools/test_pdfium_prepare.py
+          python3 tools/test_release_upgrade.py
+          python3 tools/test_native_validation.py
+      - name: Android tests and isolated test APK
+        working-directory: android
+        run: |
+          bash ./gradlew --no-daemon --console=plain --max-workers=2 -Dorg.gradle.jvmargs=-Xmx3g \
+            :app:testSideBySideDebugUnitTest :app:assembleSideBySideDebug :app:assembleSideBySideDebugAndroidTest
+      - name: Verify APK metadata, signer, alignment and pinned PDFium
+        run: |
+          mkdir -p build/ocr-beta
+          cp android/app/build/outputs/apk/sideBySide/debug/app-sideBySide-debug.apk \
+            build/ocr-beta/BADNOTE-4.1.2-beta.1-SideBySide-Debug.apk
+          python3 tools/verify_apk.py build/ocr-beta/BADNOTE-4.1.2-beta.1-SideBySide-Debug.apk \
+            --build-tools "$ANDROID_HOME/build-tools/36.1.0" \
+            --expected-package com.inkforge.note5.debug --expected-min-sdk 23 --expected-target-sdk 36 \
+            --expected-version-code 412 --expected-version-name 4.1.2-beta.1-debug \
+            --pdfium-manifest build/dependencies/pdfium-8086/verification.json \
+            > build/ocr-beta/apk-verification.json
+          sha256sum build/ocr-beta/*.apk > build/ocr-beta/SHA256SUMS
+      - name: Allow emulator KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Android OCR lifetime and storage boundary checks
+        uses: reactivecircus/android-emulator-runner@4c44018e59b437e86cdfc41da381398f93ed8808 # v2
+        with:
+          api-level: 35
+          arch: x86_64
+          target: google_apis
+          disable-animations: true
+          script: bash tools/check_ocr_beta_device.sh
+      - name: Upload verified beta and evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: badnote-4.1.2-beta.1
+          path: build/ocr-beta/
+          if-no-files-found: error
+
+  publish:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/codex/ocr-4.1.2-beta.1'
+    needs: verify
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Download this run's verified artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name badnote-4.1.2-beta.1 --dir build/ocr-beta
+      - name: Publish prerelease without changing Latest or an existing tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view v4.1.2-beta.1 --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            existing=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/v4.1.2-beta.1" --jq '.object.sha')
+            test "$existing" = "$GITHUB_SHA" || { echo 'The beta tag already points to a different commit.'; exit 1; }
+            gh release upload v4.1.2-beta.1 build/ocr-beta/* --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create v4.1.2-beta.1 build/ocr-beta/* --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" --title 'BADNOTE 4.1.2 Beta 1' \
+              --prerelease --latest=false --notes-file docs/RELEASE-4.1.2-BETA-KO.md
+          fi
