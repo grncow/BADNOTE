@@ -10,6 +10,7 @@ plugins {
 def signingProperties = new Properties()
 def signingFile = rootProject.file('local-signing.properties')
 if (signingFile.exists()) signingFile.withInputStream { signingProperties.load(it) }
+def ocrBetaEnabled = providers.gradleProperty('badnoteOcrBeta').orElse('false').get().toBoolean()
 
 android {
     namespace 'com.inkforge.notesstudio'
@@ -70,8 +71,8 @@ android {
             buildConfigField 'boolean', 'OCR_MIXED_SOURCES', 'true'
         }
         release {
-            buildConfigField 'boolean', 'OCR_LAYOUT_V2', 'false'
-            buildConfigField 'boolean', 'OCR_MIXED_SOURCES', 'false'
+            buildConfigField 'boolean', 'OCR_LAYOUT_V2', ocrBetaEnabled.toString()
+            buildConfigField 'boolean', 'OCR_MIXED_SOURCES', ocrBetaEnabled.toString()
             minifyEnabled false
             shrinkResources false
             if (signingFile.exists()) signingConfig signingConfigs.release

@@ -11,14 +11,17 @@
 
 ## 설치
 
-첨부 `BADNOTE-4.1.2-beta.1-SideBySide-Debug.apk`는 **독립된 개발 테스트 앱**입니다. 패키지는 `com.inkforge.note5.debug`, versionCode는 412, 표시 버전은 `4.1.2-beta.1-debug`입니다. 기존 정식 앱의 데이터와 서명을 사용하지 않습니다. 기존 노트는 `.ifnote` 내보내기/가져오기로 옮길 수 있습니다. 기존 앱 삭제는 필요하지 않습니다.
+- `bad-note-Android-4.1.2-beta.1-Update.apk`: 기존 `com.inkforge.note4` 앱 업데이트용입니다.
+- `bad-note-Android-4.1.2-beta.1-SideBySide.apk`: `com.inkforge.note5` 병행 설치용입니다. 이전 병행 설치 앱이 있으면 해당 앱을 업데이트합니다.
+- 표시 버전은 `4.1.2-beta.1`, versionCode는 412, 최소 Android 6.0입니다.
+- GitHub가 제공하는 Source code ZIP과 TAR.GZ를 포함하여 첨부 목록은 총 4개입니다.
 
-기존 배포용 개인 서명키가 이 작업 환경에 없으므로 `com.inkforge.note4`/`com.inkforge.note5`용 업데이트 APK를 새 키로 만들어 제공하지 않습니다. 이번 테스트 APK의 CI debug 서명은 이후 배포와 동일하다고 보장하지 않습니다.
+배포 APK는 4.1.1-beta.1과 동일한 서명 인증서를 확인한 뒤 공개합니다. 서명키가 설정되지 않은 빌드는 `Unsigned`라는 이름으로 Actions 빌드 기록에만 보관하며 릴리스에 올리지 않습니다.
 
 ## 검증 범위와 남은 작업
 
-공개 APK는 GitHub Actions에서 전체 Android 단위 테스트, APK 메타데이터·서명·정렬·PDFium 해시 검사, API 35 에뮬레이터의 OCR Task 수명과 저장·교정 검사를 모두 통과한 실행에서만 첨부합니다. 검사 기록과 APK SHA-256도 함께 첨부합니다.
+공개 APK는 GitHub Actions에서 전체 Android 단위 테스트, APK 메타데이터·기존 인증서·정렬·PDFium 해시 검사, API 35 에뮬레이터의 OCR Task 수명과 저장·교정 검사를 모두 통과한 실행에서만 첨부합니다. 검사 JSON, 로그, 해시는 Actions 빌드 기록에 보관합니다.
 
-합성 좌표의 전처리 회귀 통과는 실제 필기 인식률 향상 수치가 아닙니다. 물리 Galaxy/S Pen, 같은 실필기의 전후 CER·지연·메모리, 전용 수식 SDK, PDF 문자 위치, 작은 기호 대체 가설 재시도는 미측정 또는 후속 구현입니다. 일반 release 빌드의 새 레이아웃·혼합 소스 플래그는 꺼져 있으며, 이번 debug 베타에서만 켭니다.
+합성 좌표의 전처리 회귀 통과는 실제 필기 인식률 향상 수치가 아닙니다. 물리 Galaxy/S Pen, 같은 실필기의 전후 CER·지연·메모리, 전용 수식 SDK, PDF 문자 위치, 작은 기호 대체 가설 재시도는 미측정 또는 후속 구현입니다. 이번 베타의 배포 APK는 `-PbadnoteOcrBeta=true`로 새 레이아웃·혼합 소스 경로를 켜서 빌드합니다. 기본 release 빌드에서는 계속 꺼져 있습니다.
 
-기존 Room 스키마(버전 2), 원본 획/노트 파일, Undo와 기존 교정 테이블은 유지합니다. 새 원본 지문이 없는 이전 교정은 입력이 정확히 일치할 때만 연결하고, 나머지는 저장소와 파일 sidecar에 보존합니다. 실험 경로 롤백은 debug 설정의 `OCR_LAYOUT_V2`/`OCR_MIXED_SOURCES`를 false로 바꾸어 재빌드하며, 지문 변경에 따라 OCR 결과를 다시 생성합니다.
+기존 Room 스키마(버전 2), 원본 획/노트 파일, Undo와 기존 교정 테이블은 유지합니다. 새 원본 지문이 없는 이전 교정은 입력이 정확히 일치할 때만 연결하고, 나머지는 저장소와 파일 sidecar에 보존합니다. 실험 경로 롤백은 `-PbadnoteOcrBeta=false`로 release APK를 재빌드하며, 지문 변경에 따라 OCR 결과를 다시 생성합니다.
