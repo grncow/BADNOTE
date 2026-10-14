@@ -28,6 +28,7 @@ jobs:
         with:
           cmdline-tools-version: '13114758'
           log-accepted-android-sdk-licenses: 'false'
+          packages: 'platform-tools'
       - name: Install pinned Android tools
         run: sdkmanager 'platforms;android-36' 'build-tools;36.1.0' 'ndk;28.2.13676358' 'cmake;3.22.1'
       - name: Evaluation and compatibility tool regressions
