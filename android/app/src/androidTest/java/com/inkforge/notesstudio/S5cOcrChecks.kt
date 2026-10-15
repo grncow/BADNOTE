@@ -86,6 +86,10 @@ internal object S5cOcrChecks {
             check(repository.ocrResult(copy.id)!!.array("regions").getJSONObject(0).optString("correctedText") == "user correction") {
                 "Attached correction must follow the duplicated original, with new source IDs"
             }
+            // Keep the duplicate valid but distinct so the stale-original search assertion is isolated.
+            val copiedRegion = repository.ocrResult(copy.id)!!.array("regions").getJSONObject(0).getString("id")
+            check(repository.correctOcrRegion(copy.id,copiedRegion,"copied correction"))
+            check(repository.ocrText(copy.id).contains("copied correction"))
             val snapshot = requireNotNull(repository.readOcrSnapshot(doc.id,page.id))
             check(repository.readOcrSnapshot("wrong-document",page.id) == null)
             val beforeUndo = requireNotNull(repository.page(page.id))

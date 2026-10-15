@@ -549,6 +549,10 @@ class MainActivity:ComponentActivity(){
         canvas.onPageChanged={position->if(manualOcrPageId!=null&&canvas.currentPage?.id!=manualOcrPageId)
             cancelManualOcr("다른 페이지로 이동해 인식을 취소했습니다.")
             updatePageLabel();rememberPosition(position);scheduleOcr()}
+        canvas.onContactChanged={writing->if(inkView===canvas){
+            pageOcr.setWriting(writing)
+            if(writing){ocrTask?.let{handler.removeCallbacks(it)};ocrTask=null}else scheduleOcr()
+        }}
         canvas.onEdit={pageId,change,positions->
             invalidateOcr(pageId)
             val documentId=doc.id;enqueueSave({repository.commit(documentId,pageId,change,positions)})
@@ -937,7 +941,7 @@ class MainActivity:ComponentActivity(){
     }
     private fun scheduleOcr(){
         ocrTask?.let{handler.removeCallbacks(it)}
-        if(!settings.optBoolean("autoOcr",true)&&!settings.optBoolean("autoMath",false))return
+        if(inkView?.hasActiveContact==true||!settings.optBoolean("autoOcr",true)&&!settings.optBoolean("autoMath",false))return
         ocrTask=Runnable{recognize(false,true)}.also{handler.postDelayed(it,6500)}
     }
     private fun ocrPolicy()=settings.optString("ocrLanguagePolicy").ifBlank{when(settings.optString("language","ko")){
@@ -946,6 +950,7 @@ class MainActivity:ComponentActivity(){
         if(manualOcrPageId==pageId)cancelManualOcr("페이지가 변경되어 인식을 취소했습니다.")else pageOcr.cancel(pageId)}
     private fun recognize(math:Boolean,automatic:Boolean){
         val view=inkView?:return;val page=view.currentPage?:return;val doc=document?:return
+        if(automatic&&view.hasActiveContact)return
         if(math){
             if(recognitionBusy)return
             recognitionBusy=true
@@ -972,6 +977,7 @@ class MainActivity:ComponentActivity(){
         afterSaved{
             if(document?.id!=doc.id||inkView?.currentPage?.id!=page.id||(pageEditEpoch[page.id]?:0)!=startEpoch||
                 !automatic&&(uiToken!=ocrUiToken||manualOcrPageId!=page.id))return@afterSaved
+            if(automatic&&inkView?.hasActiveContact==true)return@afterSaved
             pageOcr.request(doc.id,page.id,policy,automatic,
                 progress={stage,done,total->if(!automatic)runOnUiThread{if(document?.id==doc.id&&
                     inkView?.currentPage?.id==page.id&&uiToken==ocrUiToken&&manualOcrPageId==page.id)
@@ -1385,7 +1391,7 @@ class MainActivity:ComponentActivity(){
     override fun onResume(){super.onResume();if(::pageOcr.isInitialized){recognition.setActive(true);pageOcr.setActive(true)}}
     override fun onPause(){ocrTask?.let{handler.removeCallbacks(it)};cancelManualOcr("손글씨 인식을 취소했습니다.")
         if(::pageOcr.isInitialized){pageOcr.setActive(false);recognition.setActive(false)}
-        inkView?.finishContact();if(audio.recording)stopRecording();super.onPause()}
+        inkView?.finishContact();ocrTask?.let{handler.removeCallbacks(it)};if(audio.recording)stopRecording();super.onPause()}
     override fun onConfigurationChanged(newConfig:Configuration){super.onConfigurationChanged(newConfig);val index=inkView?.currentIndex?:0;afterSaved{if(document==null)showLibrary()else showEditor(index)}}
     override fun onTrimMemory(level:Int){super.onTrimMemory(level);if(level>=android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW){
         if(::repository.isInitialized)repository.clearOcrMemoryCache()

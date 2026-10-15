@@ -20,12 +20,14 @@ class PageOcrCoordinator(private val repository: NoteRepository, private val rec
                 complete: (Receipt) -> Unit) = queue.request(documentId, pageId, policy, automatic, expectedDigest, progress, complete)
     fun cancel(pageId: String) = queue.cancel(pageId)
     fun setActive(value: Boolean) = queue.setActive(value)
+    fun setWriting(value: Boolean) = queue.setWriting(value)
     fun close() = queue.close()
 
     private fun process(request: OcrRequestQueue.Request): Receipt {
         if (!queue.current(request)) return Receipt(false, null, "cancelled")
         val snapshot = repository.readOcrSnapshot(request.documentId, request.pageId)
             ?: return Receipt(false, null, "pageMissing")
+        if (!queue.current(request)) return Receipt(false, null, "cancelled")
         val page = snapshot.page
         val imageSource = OcrSources.hasRasterSource(page)
         if (page.objects.none { it.optString("type") == "stroke" } && !imageSource) return Receipt(false, null, "noInk")
@@ -33,6 +35,7 @@ class PageOcrCoordinator(private val repository: NoteRepository, private val rec
         val digest = OcrInput.pageDigest(page, request.policy)
         if (request.expectedDigest != null && digest != request.expectedDigest)
             return Receipt(false, null, "stalePage")
+        if (!queue.current(request)) return Receipt(false, null, "cancelled")
         val started = System.nanoTime()
         val layout = PageOcrLayout.analyze(page.objects, page.width, page.height)
         if (layout.regions.isEmpty() && layout.unresolved.isEmpty() && layout.invalidInput.isEmpty() &&
@@ -40,8 +43,10 @@ class PageOcrCoordinator(private val repository: NoteRepository, private val rec
             return Receipt(false, null, "noInk")
         val layoutMs = (System.nanoTime() - started) / 1_000_000
         val recognitionRegions = layout.regions.flatMap { PageOcrLayout.splitForBudget(it) ?: listOf(it) }
+        if (!queue.current(request)) return Receipt(false, null, "cancelled")
         val modelTags = if (recognitionRegions.isEmpty()) emptyList() else recognition.modelTags(request.policy)
         if (modelTags.isNotEmpty()) recognition.ensureModels(request.policy)
+        if (!queue.current(request)) return Receipt(false, null, "cancelled")
         val modelGeneration = modelTags.joinToString("|") { "$it:${repository.modelGeneration(it)}" }
         if (request.automatic && repository.hasCurrentOcrIndex(
                 request.pageId, generation, digest, request.policy, modelGeneration
@@ -73,6 +78,7 @@ class PageOcrCoordinator(private val repository: NoteRepository, private val rec
                     val imageLanguage = if (request.policy == "en-primary") "en" else if (request.policy == "mixed-review") "ko" else request.policy.substringBefore('-')
                     val (imageDigest, text) = try {
                         val key = OcrInput.imageKey(imagePage, request.policy, bitmap)
+                        if (!queue.current(request)) return Receipt(false, null, "cancelled")
                         handedToEngine = true
                         key to recognition.image(bitmap, imageLanguage,lease::close)
                     } finally { if (!handedToEngine) lease.close() }
@@ -118,6 +124,7 @@ class PageOcrCoordinator(private val repository: NoteRepository, private val rec
                         writingHeight, region.timeMode, repository.modelGeneration(tag))
                     output.put("inputDigest", inputDigest)
                     val cached = repository.cachedOcr(key)
+                    if (!queue.current(request)) return Receipt(false, null, "cancelled")
                     val models = if (cached == null || request.policy == "mixed-review")
                         recognition.recognizeRegion(region, request.policy) else emptyList()
                     val primary = models.firstOrNull()
@@ -195,7 +202,7 @@ class PageOcrCoordinator(private val repository: NoteRepository, private val rec
 internal class OcrRequestQueue(private val worker: Executor,
                                private val process: (Request) -> PageOcrCoordinator.Receipt) {
     data class Request(val documentId: String, val pageId: String, val policy: String,
-                       val automatic: Boolean, val token: Long,
+                       val automatic: Boolean, val token: Long, val writingEpoch: Long,
                        val expectedDigest: String?,
                        val progress: (String, Int, Int) -> Unit,
                        val complete: (PageOcrCoordinator.Receipt) -> Unit)
@@ -203,6 +210,8 @@ internal class OcrRequestQueue(private val worker: Executor,
     private val pending = LinkedHashMap<String, Request>()
     private val epochs = HashMap<String, Long>()
     private val sequence = AtomicLong()
+    private val writingEpoch = AtomicLong()
+    @Volatile private var writing = false
     private var draining = false
     private var activeRequest: Request? = null
     private var committedToken: Long? = null
@@ -224,14 +233,16 @@ internal class OcrRequestQueue(private val worker: Executor,
                 progress: (String, Int, Int) -> Unit, complete: (PageOcrCoordinator.Receipt) -> Unit) {
         var cancelled: Request? = null
         var rejected = false
+        val contactEpoch = writingEpoch.get()
         synchronized(lock) {
             if (closed || !active) rejected = true
+            else if (automatic && (writing || contactEpoch != writingEpoch.get())) rejected = true
             else if (automatic && pending[pageId]?.automatic == false) rejected = true
             else {
                 val token = sequence.incrementAndGet()
                 if (!(automatic && activeRequest?.pageId == pageId && activeRequest?.automatic == false))
                     epochs[pageId] = token
-                cancelled = pending.put(pageId, Request(documentId, pageId, policy, automatic, token, expectedDigest, progress, complete))
+                cancelled = pending.put(pageId, Request(documentId, pageId, policy, automatic, token, contactEpoch, expectedDigest, progress, complete))
                 if (!draining) { draining = true; worker.execute(::drain) }
             }
         }
@@ -246,6 +257,13 @@ internal class OcrRequestQueue(private val worker: Executor,
         }
         removed?.let { deliver(it, PageOcrCoordinator.Receipt(false, null, "cancelled")) }
     }
+    /** Input must never wait for the persistence lock. An old automatic request stays invalid after lift. */
+    fun setWriting(value: Boolean) {
+        if (value) { writing = true; writingEpoch.incrementAndGet() }
+        else writing = false
+    }
+    private fun allowedDuringWriting(request: Request) =
+        !request.automatic || (!writing && request.writingEpoch == writingEpoch.get())
     fun setActive(value: Boolean) {
         val removed = synchronized(lock) {
             active = value
@@ -265,11 +283,11 @@ internal class OcrRequestQueue(private val worker: Executor,
         removed.forEach { deliver(it, PageOcrCoordinator.Receipt(false, null, "cancelled")) }
     }
     fun current(request: Request) = synchronized(lock) {
-        !closed && active && epochs[request.pageId] == request.token
+        !closed && active && epochs[request.pageId] == request.token && allowedDuringWriting(request)
     }
     /** A cancellation before this boundary prevents persistence; one after it is a later action. */
     fun applyIfCurrent(request: Request, apply: () -> Boolean): Boolean? = synchronized(lock) {
-        if (!closed && active && epochs[request.pageId] == request.token) {
+        if (!closed && active && epochs[request.pageId] == request.token && allowedDuringWriting(request)) {
             apply().also { if (it) committedToken = request.token }
         } else null
     }

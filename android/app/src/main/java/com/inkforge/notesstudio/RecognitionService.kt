@@ -22,7 +22,12 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 /** One actual ML Kit Task at a time, including image OCR after an ink timeout. */
 class RecognitionService(private val lowMemory: Boolean = false) : Closeable {
-    val executor = Executors.newSingleThreadExecutor()
+    val executor = Executors.newSingleThreadExecutor { task ->
+        Thread({
+            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
+            task.run()
+        }, "badnote-ocr")
+    }
     private val permit = Semaphore(1)
     private val blocked = AtomicBoolean(false)
     private val closing = AtomicBoolean(false)

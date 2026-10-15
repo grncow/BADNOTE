@@ -37,6 +37,8 @@ class InkCanvasView(context:Context,private val repository:NoteRepository):View(
     var penSettings=JSONObject()
     var onPageChanged:(Int)->Unit={}
     var onEdit:(String,ObjectChange,Map<String,Int>)->Unit={_,_,_->}
+    var onContactChanged:(Boolean)->Unit={}
+    val hasActiveContact get()=pointer>=0||contactPage!=null
     var onInsert:(Tool,Float,Float)->Unit={_,_,_->}
     var onSelection:(List<JSONObject>)->Unit={}
     var onObjectTap:(JSONObject)->Unit={}
@@ -339,6 +341,7 @@ class InkCanvasView(context:Context,private val repository:NoteRepository):View(
             val page=currentPage?:return true
             if(tool==Tool.HAND)return handlePan(event)
             pointer=event.getPointerId(index);contactPage=page;requestUnbufferedDispatch(event)
+            onContactChanged(true)
             eraseBefore.clear();eraseAfter.clear();erasePositions.clear();erasePositions.putAll(positions(page));contactAdded.clear()
             val p=point(event,index)
             if(tool==Tool.ERASER||buttonEraser(event,index))beginErase(p) else beginInk(p)
@@ -389,7 +392,7 @@ class InkCanvasView(context:Context,private val repository:NoteRepository):View(
             Tool.LASSO->{moveBefore=selected().filter{!it.optBoolean("locked")}.takeIf{list->list.any{InkGeometry.bounds(it).expanded(10/scale).contains(p.x,p.y)}}?.map{it.copyJson()}?:emptyList()
                 moveStart=if(moveBefore.isNotEmpty())p else null
                 if(moveBefore.isEmpty()){selection.clear();onSelection(emptyList())}}
-            Tool.TEXT,Tool.STICKY,Tool.IMAGE->{onInsert(tool,p.x,p.y);pointer=-1;contactPage=null;points.clear()}
+            Tool.TEXT,Tool.STICKY,Tool.IMAGE->{onInsert(tool,p.x,p.y);resetContact(ContactState.IDLE)}
             else->Unit
         }
         val stroke=live
@@ -555,9 +558,11 @@ class InkCanvasView(context:Context,private val repository:NoteRepository):View(
         resetContact(if(pointer>=0)ContactState.CANCELLED else ContactState.IDLE)
     }
     private fun resetContact(state:ContactState){
+        val hadContact=hasActiveContact
         eraseBefore.clear();eraseAfter.clear();erasePositions.clear();contactAdded.clear();erasing=false
         pointer=-1;contactPage=null;points.clear();live=null;moveBefore=emptyList();moveStart=null
         contactTool=null;heldShape=false;eraserPoint=null;contactState=state;invalidate()
+        if(hadContact)onContactChanged(false)
     }
     private fun positions(page:NotePage)=page.objects.mapIndexed{i,obj->obj.getString("id") to i}.toMap()
     private fun advanceRevisions(page:NotePage,change:ObjectChange){
