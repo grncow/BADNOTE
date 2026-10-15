@@ -7,6 +7,7 @@ import android.os.Debug
 import android.os.SystemClock
 import android.view.InputDevice
 import android.view.MotionEvent
+import org.json.JSONObject
 import java.nio.ByteBuffer
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -58,24 +59,34 @@ object ViewportChecks {
             val times = mutableListOf<Long>()
             val hashes = mutableListOf<Long>()
             val pixels = ByteBuffer.allocate(bitmap.byteCount)
-            val range = InkCanvasView::class.java.declaredMethods.firstOrNull { it.name == "visiblePageIndices" }
-                ?.apply { isAccessible = true }
             var candidates = 0
+            var heightReads = 0
             val pan = InkCanvasView::class.java.getDeclaredField("panY").apply { isAccessible = true }
             try {
                 val count = 10_000
                 view.layout(0, 0, 480, 640)
-                view.open(List(count) { "viewport-$it" }, List(count) { json("height" to 1414) })
+                // Count the metadata reads performed by the real draw loop, including culled pages.
+                // This catches accidentally leaving a full-document loop around a bounded helper.
+                val metadata = List(count) {
+                    object : JSONObject() {
+                        override fun optDouble(name: String?, fallback: Double): Double {
+                            if (name == "height") heightReads++
+                            return super.optDouble(name, fallback)
+                        }
+                    }.put("height", 1414)
+                }
+                view.open(List(count) { "viewport-$it" }, metadata)
                 // Warm fonts/Canvas; loaded-page placeholders isolate viewport traversal from storage/PDF IO.
                 repeat(3) { view.draw(canvas) }
                 repeat(60) { frame ->
                     view.zoomBy(if (frame % 2 == 0) 1.08f else 1f / 1.08f)
                     pan.setFloat(view, -(frame * (count - 1) / 59) * 1442f * view.scale)
                     bitmap.eraseColor(0)
+                    heightReads = 0
                     val start = Debug.threadCpuTimeNanos()
                     view.draw(canvas)
                     times += Debug.threadCpuTimeNanos() - start
-                    candidates += (range?.invoke(view) as? IntRange)?.count() ?: count
+                    candidates += heightReads
                     if (frame in listOf(0, 29, 59)) {
                         pixels.clear(); bitmap.copyPixelsToBuffer(pixels)
                         hashes += CRC32().apply { update(pixels.array()) }.value

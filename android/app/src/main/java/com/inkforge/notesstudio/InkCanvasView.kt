@@ -218,7 +218,7 @@ class InkCanvasView(context:Context,private val repository:NoteRepository):View(
         if(pageIds.isEmpty()){if(scene)background.endFrame();return}
         val visible=mutableSetOf<String>()
         var nearest=currentIndex;var distance=Float.MAX_VALUE
-        val range=if(continuous)pageIds.indices else currentIndex..currentIndex
+        val range=visiblePageIndices()
         for(i in range){
             val top=originY+pageTop(i)*scale;val pageHeight=metadata.getOrNull(i)?.f("height",1414f)?:1414f
             if(top>height+500||top+pageHeight*scale< -500)continue
