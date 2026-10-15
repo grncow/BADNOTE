@@ -38,7 +38,7 @@ class InkCanvasView(context:Context,private val repository:NoteRepository):View(
     var onPageChanged:(Int)->Unit={}
     var onEdit:(String,ObjectChange,Map<String,Int>)->Unit={_,_,_->}
     var onContactChanged:(Boolean)->Unit={}
-    val hasActiveContact get()=pointer>=0||contactPage!=null
+    val hasActiveContact get()=pointer>=0||contactPage!=null||contactState==ContactState.PANNING||contactState==ContactState.PINCHING
     var onInsert:(Tool,Float,Float)->Unit={_,_,_->}
     var onSelection:(List<JSONObject>)->Unit={}
     var onObjectTap:(JSONObject)->Unit={}
@@ -60,6 +60,8 @@ class InkCanvasView(context:Context,private val repository:NoteRepository):View(
     private var pageIds:List<String> = emptyList()
     private var metadata:List<JSONObject> = emptyList()
     private var tops=FloatArray(0)
+    private var bottoms=FloatArray(0)
+    private var pagePositionsOrdered=true
     var currentIndex=0;private set
     val currentPage get()=pageIds.getOrNull(currentIndex)?.let{pages[it]}
     private val background=BackgroundLoader(context,repository,{sceneChanged()},{onStatus(it)})
@@ -134,7 +136,19 @@ class InkCanvasView(context:Context,private val repository:NoteRepository):View(
     }
     fun replacePage(page:NotePage){pages[page.id]=page;pictures.remove(page.id);spatialIndexes.remove(page.id);sceneChanged()}
     private fun indexFor(page:NotePage)=spatialIndexes.getOrPut(page.id){PageSpatialIndex().apply{rebuild(page.objects)}}
-    private fun layoutPages(){var y=0f;tops=FloatArray(pageIds.size){i->val value=y;y+=metadata.getOrNull(i)?.f("height",1414f)?:1414f;y+=28f;value}}
+    private fun layoutPages(){
+        var y=0f;tops=FloatArray(pageIds.size);bottoms=FloatArray(pageIds.size);pagePositionsOrdered=true
+        for(i in pageIds.indices){
+            val pageHeight=metadata.getOrNull(i)?.f("height",1414f)?:1414f
+            tops[i]=y;bottoms[i]=y+pageHeight
+            pagePositionsOrdered=pagePositionsOrdered&&pageHeight.isFinite()&&pageHeight>0&&y.isFinite()&&bottoms[i].isFinite()&&bottoms[i]+28f>y
+            y=bottoms[i]+28f
+        }
+    }
+    private fun visiblePageIndices():IntRange {
+        if(!continuous)return currentIndex..currentIndex
+        return pageViewportRange(tops,bottoms,(-500f-originY)/scale,(height+500f-originY)/scale,pagePositionsOrdered)
+    }
     fun goTo(index:Int){
         if(pageIds.isEmpty())return
         cancelContact();setCurrent(index.coerceIn(0,pageIds.lastIndex));panY=-pageTop(currentIndex)*scale;panX=0f;requestPage(currentIndex);sceneChanged()
@@ -160,7 +174,7 @@ class InkCanvasView(context:Context,private val repository:NoteRepository):View(
     private fun pageIndexAt(x:Float,y:Float):Int? {
         val docX=(x-originX)/scale;val docY=(y-originY)/scale
         if(docX<0||docX>1000)return null
-        val range=if(continuous)pageIds.indices else currentIndex..currentIndex
+        val range=visiblePageIndices()
         return range.firstOrNull{docY>=pageTop(it)&&docY<=pageTop(it)+(metadata.getOrNull(it)?.f("height",1414f)?:1414f)}
     }
     fun screenPoint(x:Float,y:Float,index:Int=currentIndex)=PointF(originX+x*scale,originY+(pageTop(index)+y)*scale)
@@ -354,7 +368,7 @@ class InkCanvasView(context:Context,private val repository:NoteRepository):View(
         var cx=0f;var cy=0f;for(i in 0 until count){cx+=event.getX(i);cy+=event.getY(i)};cx/=count;cy/=count
         val span=if(count>=2)hypot(event.getX(0)-event.getX(1),event.getY(0)-event.getY(1)) else 0f
         when(event.actionMasked){
-            MotionEvent.ACTION_DOWN->{contactState=ContactState.PANNING;touchX=cx;touchY=cy;touchSpan=span;touchTravel=0f;touchStartTime=event.eventTime;maxTouches=1}
+            MotionEvent.ACTION_DOWN->{contactState=ContactState.PANNING;onContactChanged(true);touchX=cx;touchY=cy;touchSpan=span;touchTravel=0f;touchStartTime=event.eventTime;maxTouches=1}
             MotionEvent.ACTION_POINTER_DOWN->{contactState=ContactState.PINCHING;touchX=cx;touchY=cy;touchSpan=span;maxTouches=max(maxTouches,count)}
             MotionEvent.ACTION_MOVE->{val dx=cx-touchX;val dy=cy-touchY;touchTravel+=hypot(dx,dy)
                 if(count>=2&&touchSpan>0)zoomAt(span/touchSpan,cx,cy)
@@ -368,7 +382,7 @@ class InkCanvasView(context:Context,private val repository:NoteRepository):View(
                         if(obj?.optString("type")=="tape")toggleTape(obj) else if(obj!=null)onObjectTap(obj)}
                 }
                 if(!continuous&&abs(panY)>height*.65f&&zoom<=1.05f){val direction=if(panY<0)1 else -1;goTo(currentIndex+direction)}
-                maxTouches=0;contactState=ContactState.IDLE;sceneChanged()
+                maxTouches=0;resetContact(ContactState.IDLE);sceneChanged()
             }
         };return true
     }
@@ -601,4 +615,17 @@ class InkCanvasView(context:Context,private val repository:NoteRepository):View(
     fun redo(){if(readOnly)return;val page=currentPage?:return;val change=histories[page.id]?.redo()?:return;change.apply(page);advanceRevisions(page,change);pictures.remove(page.id);spatialIndexes.remove(page.id);onEdit(page.id,change,positions(page));selection.clear();onSelection(emptyList());sceneChanged()}
     fun close(){cancelContact();frontBuffer?.hideForLegacy();frontBuffer=null;background.close()}
     override fun performClick():Boolean {super.performClick();return true}
+}
+
+/** Conservative bounds; the original screen-space cull still decides what is drawn. */
+internal fun pageViewportRange(tops:FloatArray,bottoms:FloatArray,from:Float,to:Float,ordered:Boolean):IntRange {
+    if(!ordered||!from.isFinite()||!to.isFinite()||bottoms.size!=tops.size)return tops.indices
+    if(tops.isEmpty()||from>to)return IntRange.EMPTY
+    var low=0;var high=tops.size
+    while(low<high){val middle=(low+high) ushr 1;if(bottoms[middle]<from)low=middle+1 else high=middle}
+    val first=low
+    low=first;high=tops.size
+    while(low<high){val middle=(low+high) ushr 1;if(tops[middle]<=to)low=middle+1 else high=middle}
+    // Adjacent guards retain boundary pages when large-document float transforms round differently.
+    return (first-1).coerceAtLeast(0)..low.coerceAtMost(tops.lastIndex)
 }

@@ -34,6 +34,7 @@ class NativeSmokeInstrumentation:Instrumentation(){
     private var migrationOnly=false
     private var legacyOnly=false
     private var ocrOnly=false
+    private var viewportOnly=false
     private var writingOnly=false
     private var writingBaseline=false
     private var pdfOnly=false
@@ -50,7 +51,7 @@ class NativeSmokeInstrumentation:Instrumentation(){
     private var w3Only=false
     private var w3RunId:String?=null
     private var replayArguments:Bundle?=null
-    override fun onCreate(arguments:Bundle?){super.onCreate(arguments);writingOnly=arguments?.getString("writingOnly")=="true";writingBaseline=arguments?.getString("writingBaseline")=="true";uiOnly=arguments?.getString("uiOnly")=="true";migrationOnly=arguments?.getString("migrationOnly")=="true";ocrOnly=arguments?.getString("ocrOnly")=="true";pdfOnly=arguments?.getString("pdfOnly")=="true";s3Only=arguments?.getString("s3Only")=="true";s5aOnly=arguments?.getString("s5aOnly")=="true";s5bOnly=arguments?.getString("s5bOnly")=="true";s5aBitmapOnly=arguments?.getString("s5aBitmapOnly")=="true";brushRasterOnly=arguments?.getString("brushRasterOnly")=="true";brushRasterTransparent=arguments?.getString("brushRasterTransparent")=="true";s5cOnly=arguments?.getString("s5cOnly")=="true";mediaOnly=arguments?.getString("mediaOnly")=="true";pdfStressMiB=arguments?.getString("pdfStressMiB")?.toIntOrNull();pdfStressCancel=arguments?.getString("pdfStressCancel")=="true";w3Only=arguments?.getString("w3Only")=="true";w3RunId=arguments?.getString("w3RunId");replayArguments=arguments?.takeIf{it.containsKey("ocrInput")};legacyOnly=arguments?.getString("legacyOnly")=="true";start()}
+    override fun onCreate(arguments:Bundle?){super.onCreate(arguments);viewportOnly=arguments?.getString("viewportOnly")=="true";writingOnly=arguments?.getString("writingOnly")=="true";writingBaseline=arguments?.getString("writingBaseline")=="true";uiOnly=arguments?.getString("uiOnly")=="true";migrationOnly=arguments?.getString("migrationOnly")=="true";ocrOnly=arguments?.getString("ocrOnly")=="true";pdfOnly=arguments?.getString("pdfOnly")=="true";s3Only=arguments?.getString("s3Only")=="true";s5aOnly=arguments?.getString("s5aOnly")=="true";s5bOnly=arguments?.getString("s5bOnly")=="true";s5aBitmapOnly=arguments?.getString("s5aBitmapOnly")=="true";brushRasterOnly=arguments?.getString("brushRasterOnly")=="true";brushRasterTransparent=arguments?.getString("brushRasterTransparent")=="true";s5cOnly=arguments?.getString("s5cOnly")=="true";mediaOnly=arguments?.getString("mediaOnly")=="true";pdfStressMiB=arguments?.getString("pdfStressMiB")?.toIntOrNull();pdfStressCancel=arguments?.getString("pdfStressCancel")=="true";w3Only=arguments?.getString("w3Only")=="true";w3RunId=arguments?.getString("w3RunId");replayArguments=arguments?.takeIf{it.containsKey("ocrInput")};legacyOnly=arguments?.getString("legacyOnly")=="true";start()}
     private fun <T> ui(block:()->T):T{val value=AtomicReference<T>();val failure=AtomicReference<Throwable>();runOnMainSync{try{value.set(block())}catch(e:Throwable){failure.set(e)}};failure.get()?.let{throw it};return value.get()}
     private fun await(label:String,condition:()->Boolean){val end=SystemClock.uptimeMillis()+30000;while(SystemClock.uptimeMillis()<end){if(condition())return;SystemClock.sleep(50)};error("Timeout: $label")}
     private fun check(value:Boolean,message:String){if(!value)throw AssertionError(message)}
@@ -100,6 +101,7 @@ class NativeSmokeInstrumentation:Instrumentation(){
             repository.transaction{repository.putPage(doc.id,page,0)}
             ui{activity.openDocument(doc.id)}
             await("native editor ready"){ui{activity.inkView?.currentPage?.id==page.id&&activity.inkView!!.width>0}}
+            if(viewportOnly){ViewportChecks.run(activity,{block->ui{block()}},writingBaseline,result);result.putString("viewport","pan_pinch_auto_gate_bounded_draw_verified");result.putString("passed","true");finish(0,result);return}
             if(writingOnly){OcrWritingChecks.run(activity,{action->motion(action,350f,380f,0)},writingBaseline,result);rawCaptureChecks(page.id);result.putString("writing","contact_auto_gate_manual_resume_raw_samples_verified");result.putString("passed","true");finish(0,result);return}
             if(s5cOnly){rawCaptureChecks(page.id);S5cOcrChecks.run(targetContext);result.putString("passed","true");result.putString("s5c","raw_samples_ocr_cancel_correction_model_generation_verified");finish(0,result);return}
             if(s5bOnly){

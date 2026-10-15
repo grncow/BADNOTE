@@ -72,11 +72,13 @@ class PageOcrCoordinator(private val repository: NoteRepository, private val rec
                 queue.progress(request, "image", 0, 1)
                 try {
                     recognition.requireAvailable()
+                    if (!queue.current(request)) return Receipt(false, null, "cancelled")
                     val bitmap = StreamingPdf.render(repository, imagePage,OcrSources.rasterWidth(imagePage))
                     val lease = BitmapLease { bitmap.recycle() }
                     var handedToEngine = false
                     val imageLanguage = if (request.policy == "en-primary") "en" else if (request.policy == "mixed-review") "ko" else request.policy.substringBefore('-')
                     val (imageDigest, text) = try {
+                        if (!queue.current(request)) return Receipt(false, null, "cancelled")
                         val key = OcrInput.imageKey(imagePage, request.policy, bitmap)
                         if (!queue.current(request)) return Receipt(false, null, "cancelled")
                         handedToEngine = true
