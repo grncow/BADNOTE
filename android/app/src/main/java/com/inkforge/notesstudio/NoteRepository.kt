@@ -448,7 +448,7 @@ class NoteRepository(context: Context, databaseName: String = NativeDatabase.NAM
         }?.copyJson()
     }
 
-        fun correctOcrRegion(pageId: String, regionId: String, text: String,
+    fun correctOcrRegion(pageId: String, regionId: String, text: String,
                          expectedInputDigest: String? = null, expectedPageDigest: String? = null): Boolean {
         var applied = false
         transaction {
@@ -501,7 +501,7 @@ class NoteRepository(context: Context, databaseName: String = NativeDatabase.NAM
             buildList { while (cursor.moveToNext()) add(cursor.getString(0) to cursor.getString(1)) }
         }
         return candidates.filter { (pageId, _) -> ocrText(pageId).contains(term, ignoreCase = true) }
-            .mapTo(LinkedHashSet()) { it.second }
+            .mapTo(LinkedHashSet<String>()) { it.second }
     }
 
     /** Page search reads small metadata plus candidate text objects, never the entire ink page. */
