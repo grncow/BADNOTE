@@ -69,6 +69,7 @@ class InkCanvasView(context:Context,private val repository:NoteRepository):View(
     private var frontBuffer:InkFrontSurface?=null
     private var sceneDirty=true
     private var frontContact=false
+    private var frontStroke:JSONObject?=null
     private enum class DrawMode { LEGACY, SCENE, OVERLAY }
     private val paint=Paint(Paint.ANTI_ALIAS_FLAG)
     private val selection=linkedSetOf<String>()
@@ -105,7 +106,7 @@ class InkCanvasView(context:Context,private val repository:NoteRepository):View(
     internal fun attachFrontBuffer(host:InkFrontSurface){frontBuffer=host;sceneDirty=true;invalidate()}
     internal fun frontBufferRecreated(){sceneChanged()}
     internal fun frontBufferPresented(presented:Boolean){
-        if(presented&&contactState!=ContactState.IDLE&&!frontContact){frontBuffer?.hideForLegacy();return}
+        if(presented&&hasActiveContact&&!frontContact){frontBuffer?.hideForLegacy();return}
         setBackgroundColor(if(presented)Color.TRANSPARENT else 0xfff7f7f8.toInt());invalidate()
     }
     private fun sceneChanged(){sceneDirty=true;if(!frontContact)frontBuffer?.hideForLegacy();invalidate()}
@@ -207,7 +208,7 @@ class InkCanvasView(context:Context,private val repository:NoteRepository):View(
     override fun onDraw(canvas:Canvas){
         super.onDraw(canvas)
         val host=frontBuffer
-        if(host!=null&&sceneDirty&&contactState==ContactState.IDLE)publishScene()
+        if(host!=null&&sceneDirty&&!hasActiveContact)publishScene()
         drawDocument(canvas,if(host?.presented==true)DrawMode.OVERLAY else DrawMode.LEGACY)
     }
     private fun drawDocument(canvas:Canvas,mode:DrawMode){
@@ -337,6 +338,8 @@ class InkCanvasView(context:Context,private val repository:NoteRepository):View(
                 for(h in 0 until event.historySize)consumePoint(point(event,pIndex,h))
                 val shouldErase=tool==Tool.ERASER||buttonEraser(event,pIndex)
                 if(shouldErase!=erasing)transitionContact(shouldErase,p) else consumePoint(p)
+                // Keep every historical sample, but submit only the event's complete snapshot.
+                updateFront()
                 invalidate();return true
             }
             if(action==MotionEvent.ACTION_UP||action==MotionEvent.ACTION_POINTER_UP){
@@ -387,6 +390,7 @@ class InkCanvasView(context:Context,private val repository:NoteRepository):View(
         };return true
     }
     private fun beginInk(p:InkPoint){
+        frontStroke=null
         erasing=false;eraserPoint=null;points=mutableListOf(p);heldShape=false;contactTool=tool
         contactState=if(tool==Tool.LASSO)ContactState.SELECTING else ContactState.DRAWING
         val page=contactPage?:return
@@ -411,8 +415,9 @@ class InkCanvasView(context:Context,private val repository:NoteRepository):View(
         }
         val stroke=live
         val host=frontBuffer
-        frontContact=stroke!=null&&tool==Tool.PEN&&host?.presented==true&&frontEligible(stroke)&&
-            host.renderFront(frontFrame(stroke))
+        // Freeze style once per contact; only the sample snapshot changes during MOVE.
+        frontStroke=stroke?.takeIf{tool==Tool.PEN&&host?.presented==true&&frontEligible(it)}?.copyJson()
+        frontContact=frontStroke?.let{host?.renderFront(frontFrame(it))}==true
         if(!frontContact)host?.hideForLegacy()
     }
     private fun frontEligible(stroke:JSONObject):Boolean{
@@ -421,11 +426,11 @@ class InkCanvasView(context:Context,private val repository:NoteRepository):View(
             Color.alpha(renderer.color(stroke.optString("color","#172033")))==255
     }
     private fun frontFrame(stroke:JSONObject)=InkFrontFrame(
-        stroke.copyJson().put("points",JSONArray(points.map{it.json()})).toString(),
+        stroke,
         originX,originY+pageTop(currentIndex)*scale,scale,
-        contactPage?.width?:1000f,contactPage?.height?:1414f)
+        contactPage?.width?:1000f,contactPage?.height?:1414f,points.toList())
     private fun updateFront(){
-        if(frontContact){val stroke=live
+        if(frontContact){val stroke=frontStroke
             if(stroke==null||frontBuffer?.renderFront(frontFrame(stroke))!=true){
                 frontBuffer?.cancelFront();frontContact=false;frontBuffer?.hideForLegacy()
             }
@@ -441,7 +446,6 @@ class InkCanvasView(context:Context,private val repository:NoteRepository):View(
                 if(moved){
                     removeCallbacks(hold);if(drawHold&&contactTool==Tool.PEN&&!ruler)postDelayed(hold,650)
                 }
-                updateFront()
             }
             Tool.SHAPE->{live?.put("x2",p.x)?.put("y2",p.y)}
             Tool.TAPE->{val a=points.first();live?.put("x",min(a.x,p.x))?.put("y",min(a.y,p.y))?.put("w",abs(a.x-p.x))?.put("h",abs(a.y-p.y))}
@@ -574,7 +578,7 @@ class InkCanvasView(context:Context,private val repository:NoteRepository):View(
     private fun resetContact(state:ContactState){
         val hadContact=hasActiveContact
         eraseBefore.clear();eraseAfter.clear();erasePositions.clear();contactAdded.clear();erasing=false
-        pointer=-1;contactPage=null;points.clear();live=null;moveBefore=emptyList();moveStart=null
+        pointer=-1;contactPage=null;points.clear();live=null;frontStroke=null;moveBefore=emptyList();moveStart=null
         contactTool=null;heldShape=false;eraserPoint=null;contactState=state;invalidate()
         if(hadContact)onContactChanged(false)
     }

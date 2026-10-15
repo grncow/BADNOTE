@@ -29,8 +29,17 @@ object LegacyBrush {
         is Boolean -> if (value) 1.0 else 0.0
         else -> value.toString().toDoubleOrNull()
     }?.takeIf { it.isFinite() }
+    private fun copiedNumber(value: Any?): Double? = when (value) {
+        null -> null
+        JSONObject.NULL -> null
+        is Number -> JSONObject.numberToString(value).toDoubleOrNull()
+        is Boolean -> if (value) 1.0 else 0.0
+        else -> value.toString().toDoubleOrNull()
+    }?.takeIf { it.isFinite() }
 
     private fun field(data: JSONObject, key: String) = if (data.has(key)) number(data.opt(key)) else null
+    private fun copiedField(data: JSONObject, key: String) =
+        if (data.has(key)) copiedNumber(data.opt(key)) else null
     private fun value(data: JSONObject?, fallback: Map<String, Double>, key: String,
                       default: Double, truthy: Boolean = false): Double {
         val found = if (data == null) fallback[key] else field(data, key)
@@ -47,6 +56,17 @@ object LegacyBrush {
             Point(item.getDouble("x"), item.getDouble("y"), field(item, "p"),
                 field(item, "azimuth"), field(item, "tx"), field(item, "ty"))
         }
+    }
+    private fun point(item: InkPoint, copiedCoordinatesAndPressure: Boolean): Point {
+        val original = item.original
+        val x = if (copiedCoordinatesAndPressure) copiedNumber(item.x) else number(item.x)
+        val y = if (copiedCoordinatesAndPressure) copiedNumber(item.y) else number(item.y)
+        val pressure = if (copiedCoordinatesAndPressure) copiedNumber(item.pressure) else number(item.pressure)
+        return Point(requireNotNull(x), requireNotNull(y),
+            if (original == null) pressure else copiedField(original, "p"),
+            if (original == null) copiedNumber(item.azimuth) else copiedField(original, "azimuth"),
+            if (original == null) copiedNumber(item.tx) else copiedField(original, "tx"),
+            if (original == null) copiedNumber(item.ty) else copiedField(original, "ty"))
     }
     private fun brush(stroke: JSONObject) = stroke.optString("brush").ifBlank { "fountain" }
     private fun settings(stroke: JSONObject) = stroke.optJSONObject("settings")
@@ -89,6 +109,41 @@ object LegacyBrush {
     private fun smoothedPoints(stroke: JSONObject) = smoothed(stroke).map { item ->
         Point(item.getDouble("x"), item.getDouble("y"), field(item, "p"),
             field(item, "azimuth"), field(item, "tx"), field(item, "ty"))
+    }
+
+    private fun smoothedPoints(stroke: JSONObject, input: List<InkPoint>): List<Point> {
+        val amount = value(settings(stroke), defaultSettings(brush(stroke)), "smoothing", .3)
+        if (input.size < 3 || amount <= 0) return input.map { point(it, true) }
+        val factor = clamp(amount, 0.0, .92)
+        val output = ArrayList<Point>(input.size)
+        output += point(input.first(), true)
+        for (index in 1 until input.size) {
+            val previous = output.last()
+            val current = point(input[index], false)
+            output += current.copy(
+                x = lerp(current.x, (previous.x + current.x) * .5, factor),
+                y = lerp(current.y, (previous.y + current.y) * .5, factor),
+                p = lerp(current.p ?: .5, previous.p ?: .5, factor * .28))
+        }
+        return output
+    }
+
+    private fun pencilRenderPoints(stroke: JSONObject, smooth: List<Point>): List<Point> {
+        if (smooth.size <= 2) return smooth
+        val minDistance = clamp(jsOr(field(stroke, "width"), 4.0) * .2, 1.2, 3.4)
+        val output = ArrayList<Point>()
+        output += smooth.first()
+        var last = smooth.first()
+        for (index in 1 until smooth.lastIndex) {
+            val point = smooth[index]
+            val dx = point.x - last.x
+            val dy = point.y - last.y
+            if (dx * dx + dy * dy >= minDistance * minDistance) { output += point; last = point }
+        }
+        if (output.last() !== smooth.last()) output += smooth.last()
+        if (output.size <= 260) return output
+        val stride = ceil(output.size / 260.0).toInt()
+        return buildList { for (index in 0 until output.lastIndex step stride) add(output[index]); add(output.last()) }
     }
 
     fun pencilRenderPoints(stroke: JSONObject): List<JSONObject> {
@@ -182,6 +237,19 @@ object LegacyBrush {
 
     fun render(stroke: JSONObject, renderScale: Double = 1.0, sink: Sink) {
         val smooth = smoothedPoints(stroke)
+        renderPoints(stroke, smooth, renderScale, sink) {
+            pencilRenderPoints(stroke).map { item -> Point(item.getDouble("x"), item.getDouble("y"),
+                field(item, "p"), field(item, "azimuth"), field(item, "tx"), field(item, "ty")) }
+        }
+    }
+
+    fun render(stroke: JSONObject, points: List<InkPoint>, renderScale: Double = 1.0, sink: Sink) {
+        val smooth = smoothedPoints(stroke, points)
+        renderPoints(stroke, smooth, renderScale, sink) { pencilRenderPoints(stroke, smooth) }
+    }
+
+    private inline fun renderPoints(stroke: JSONObject, smooth: List<Point>, renderScale: Double,
+                                    sink: Sink, pencilPoints: () -> List<Point>) {
         if (smooth.isEmpty()) return
         val brush = brush(stroke);val settings = settings(stroke);val fallback = defaultSettings(brush)
         val color = stroke.optString("color").ifBlank { "#111827" }
@@ -190,8 +258,7 @@ object LegacyBrush {
             "pencil" -> {
                 val pencilOpacity = field(stroke, "opacity") ?:
                     (if (settings == null) fallback["opacity"] else field(settings, "opacity")) ?: .78
-                val source = pencilRenderPoints(stroke).map { item -> Point(item.getDouble("x"), item.getDouble("y"),
-                    field(item, "p"), field(item, "azimuth"), field(item, "tx"), field(item, "ty")) }
+                val source = pencilPoints()
                 val random = Random(stroke.optString("id"))
                 val pencilColor = stroke.optString("color").ifBlank { "#30343a" }
                 emit(sink, "save");emit(sink, "set", "globalCompositeOperation", "multiply")

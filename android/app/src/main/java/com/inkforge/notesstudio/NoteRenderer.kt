@@ -94,8 +94,7 @@ class NoteRenderer(private val image: (String)->Bitmap? = { null }) {
     }
     fun stroke(canvas: Canvas,obj: JSONObject,rawPoints: List<InkPoint>,renderScale:Double=canvasScale(canvas)) {
         if(rawPoints.isEmpty())return
-        val live=obj.copyJson().put("points",org.json.JSONArray(rawPoints.map{it.json()}))
-        legacyBrush.draw(canvas,live,renderScale)
+        legacyBrush.draw(canvas,obj,rawPoints,renderScale)
     }
     private fun shape(canvas:Canvas,obj:JSONObject){
         val x1=obj.f("x1");val y1=obj.f("y1");val x2=obj.f("x2");val y2=obj.f("y2")

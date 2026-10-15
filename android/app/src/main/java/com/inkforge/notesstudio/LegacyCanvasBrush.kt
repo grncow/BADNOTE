@@ -19,6 +19,12 @@ class LegacyCanvasBrush {
                              val join: String = "round", val width: Double = 1.0,
                              val composite: String = "source-over")
     fun draw(canvas: Canvas, stroke: JSONObject, renderScale: Double = 1.0) {
+        execute(canvas) { sink -> LegacyBrush.render(stroke, renderScale, sink) }
+    }
+    fun draw(canvas: Canvas, stroke: JSONObject, points: List<InkPoint>, renderScale: Double = 1.0) {
+        execute(canvas) { sink -> LegacyBrush.render(stroke, points, renderScale, sink) }
+    }
+    private fun execute(canvas: Canvas, render: (LegacyBrush.Sink) -> Unit) {
         val paint = Paint(Paint.ANTI_ALIAS_FLAG)
         val saves = ArrayDeque<Pair<Style, Int>>()
         var style = Style()
@@ -38,7 +44,7 @@ class LegacyCanvasBrush {
             }
         }
         val baseline = canvas.save()
-        try { LegacyBrush.render(stroke, renderScale) { operation ->
+        try { render(LegacyBrush.Sink { operation ->
             val args = operation.args
             fun n(index: Int) = (args[index] as Number).toDouble()
             when (operation.name) {
@@ -74,7 +80,7 @@ class LegacyCanvasBrush {
                 "stroke" -> { prepare(false);canvas.drawPath(path, paint) }
                 "fill" -> { prepare(true);canvas.drawPath(path, paint) }
             }
-        }
+        })
             check(saves.isEmpty()) { "unbalancedBrushCommands" }
         } finally { canvas.restoreToCount(baseline) }
     }
