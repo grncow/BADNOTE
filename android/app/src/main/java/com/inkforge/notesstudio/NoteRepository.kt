@@ -512,7 +512,9 @@ class NoteRepository(context: Context, databaseName: String = NativeDatabase.NAM
         readableDatabase.rawQuery(
             """SELECT o.page_id,o.body FROM objects o
                 JOIN pages p ON p.id=o.page_id
-                WHERE p.document_id=? AND instr(lower(o.body),lower(?))>0
+                WHERE p.document_id=?
+                  AND (instr(o.body,'\"text\":')>0 OR instr(o.body,'\"expression\":')>0)
+                  AND instr(lower(o.body),lower(?))>0
                 ORDER BY o.position,o.rowid""".trimIndent(),
             arrayOf(documentId, term)
         ).use { cursor ->
