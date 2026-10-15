@@ -81,6 +81,7 @@ class MainActivity:ComponentActivity(){
     private var saveFailed=false
     private var libraryGeneration=0
     private var librarySearchGeneration=0L
+    private var librarySearchTask:Runnable?=null
     private var lastActivityIntentHandled=false
     private val ui by lazy { ClassicUi(this,::t) }
     private var modal:FrameLayout?=null
@@ -224,6 +225,8 @@ class MainActivity:ComponentActivity(){
         }}
     }
     private fun clearScreen(){
+        librarySearchTask?.let{handler.removeCallbacks(it)}
+        librarySearchGeneration++
         cancelManualOcr("손글씨 인식을 취소했습니다.")
         ocrStatusRow=null;ocrStatusText=null;ocrCancelButton=null
         closeSheet();editorSurface=null;editorNavbar=null;activeDock=null;undoPill=null;pageSidebar=null;searchDrawer=null;zoomLabel=null;pageLabel=null;selectionBar=null
@@ -265,15 +268,19 @@ class MainActivity:ComponentActivity(){
         val documentState=mutableStateOf<List<LibraryDocumentUi>>(emptyList())
         fun searchOcrMatches(value:String){
             val request=++librarySearchGeneration
+            librarySearchTask?.let{handler.removeCallbacks(it)}
             state.value=state.value.copy(ocrMatches=emptySet())
             if(value.isBlank())return
-            repository.executor.execute{
-                val matches=repository.searchOcrDocuments(value)
-                runOnUiThread{
-                    if(generation==libraryGeneration&&request==librarySearchGeneration&&
-                        document==null&&query==value)state.value=state.value.copy(ocrMatches=matches)
+            librarySearchTask=Runnable{
+                if(generation!=libraryGeneration||request!=librarySearchGeneration||document!=null)return@Runnable
+                repository.executor.execute{
+                    val matches=repository.searchOcrDocuments(value)
+                    runOnUiThread{
+                        if(generation==libraryGeneration&&request==librarySearchGeneration&&
+                            document==null&&query==value)state.value=state.value.copy(ocrMatches=matches)
+                    }
                 }
-            }
+            }.also{handler.postDelayed(it,320)}
         }
         val compose=ComposeView(this).apply{
             setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnDetachedFromWindow)
